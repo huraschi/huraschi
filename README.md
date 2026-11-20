@@ -28,7 +28,23 @@ python fishbot.py --key 1
 ```
 
 Nach dem Start bleiben 5 Sekunden, um ins Spiel zu wechseln.
-**Stopp:** `F8` oder Maus in die linke obere Bildschirmecke.
+**Stopp:** `F8`, „Bot stoppen“ im Dashboard oder Maus in die linke obere Bildschirmecke.
+
+## Dashboard und Aktivitaetslog
+
+Solange der Bot laeuft, zeigt <http://127.0.0.1:8765> im Browser (am besten auf einem
+zweiten Monitor oder nach der Sitzung):
+
+- Kennzahlen: Faenge, Wuerfe, Erfolgsquote, Faenge pro Stunde, mittlere Zeit bis zum Biss,
+  Fehlwuerfe, Laufzeit
+- Live-Kurve der Bewegung am Schwimmer samt Biss-Schwelle - hilfreich zum Einstellen von
+  `--factor` und `--min-motion`
+- Aktivitaetslog mit Zeitstempel (neueste Eintraege oben)
+
+Jedes Ereignis wird zusaetzlich an `fishbot_log.csv` angehaengt (Zeit, Ereignis, Nachricht)
+und bleibt so ueber mehrere Sitzungen erhalten. Anpassen mit `--port 9000` bzw.
+`--log-file pfad.csv`; `--port 0` schaltet das Dashboard ab, `--log-file ""` die Datei.
+Das Dashboard ist nur vom eigenen Rechner aus erreichbar.
 
 ## Wie es funktioniert
 

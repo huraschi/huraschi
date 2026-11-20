@@ -7,7 +7,8 @@ Ablauf pro Runde:
   4. Kleines Fenster um den Schwimmer beobachten; bei ploetzlicher starker Bewegung = Biss
   5. Rechtsklick auf den Schwimmer, kurz warten, von vorn
 
-Stoppen: F8 druecken oder Maus in die linke obere Bildschirmecke schieben.
+Stoppen: F8 druecken, "Bot stoppen" im Dashboard oder Maus in die linke obere Ecke.
+Dashboard: http://127.0.0.1:8765 (Kennzahlen, Bewegungskurve, Aktivitaetslog).
 """
 import argparse
 import statistics
@@ -16,6 +17,8 @@ import time
 from collections import deque
 
 import numpy as np
+
+from dashboard import Activity, serve
 
 CELL = 16  # Rastergroesse in Pixeln fuer die Schwimmersuche
 
@@ -111,6 +114,9 @@ def main():
     p.add_argument("--start-delay", type=float, default=5.0,
                    help="Sekunden zum Wechseln ins Spiel")
     p.add_argument("--stop-key", default="f8", help="Taste zum Beenden")
+    p.add_argument("--port", type=int, default=8765, help="Dashboard-Port (0 = aus)")
+    p.add_argument("--log-file", default="fishbot_log.csv",
+                   help="CSV-Datei fuer das Aktivitaetslog ('' = keine Datei)")
     p.add_argument("--debug", action="store_true",
                    help="Bewegungswerte ausgeben und Suchbild als debug_*.png speichern")
     args = p.parse_args()
@@ -127,12 +133,16 @@ def main():
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.02
 
-    stop = {"flag": False}
+    activity = Activity(args.log_file or None)
+    if args.port:
+        serve(activity, args.port)
+        print(f"Dashboard: http://127.0.0.1:{args.port}")
+
     stop_key = getattr(keyboard.Key, args.stop_key.lower(), None)
 
     def on_press(key):
         if key == stop_key or getattr(key, "char", None) == args.stop_key:
-            stop["flag"] = True
+            activity.stop_requested = True
             return False
 
     keyboard.Listener(on_press=on_press, daemon=True).start()
@@ -143,13 +153,13 @@ def main():
         def grab(reg):
             return np.asarray(sct.grab(reg))[:, :, :3]
 
-        print(f"Suchregion: {region}")
-        print(f"Start in {args.start_delay:.0f}s - jetzt ins Spiel wechseln. "
-              f"Stopp mit {args.stop_key.upper()}.")
+        activity.log("start", f"Start in {args.start_delay:.0f}s - jetzt ins Spiel wechseln. "
+                     f"Stopp mit {args.stop_key.upper()}. Suchregion: {region}",
+                     status="Wartet auf Start")
         time.sleep(args.start_delay)
 
-        casts = catches = 0
-        while not stop["flag"]:
+        casts = 0
+        while not activity.stop_requested:
             # Maus aus der Suchregion nehmen, damit Cursor/Tooltip nicht stoeren
             pyautogui.moveTo(region["left"] + region["width"] // 2,
                              region["top"] + region["height"] + 40)
@@ -157,6 +167,7 @@ def main():
             before = grab(region)
             pyautogui.press(args.key)
             casts += 1
+            activity.log("cast", f"Wurf {casts}", status="Wirft aus")
             time.sleep(args.cast_wait)
             after = grab(region)
 
@@ -165,43 +176,48 @@ def main():
                 shot = sct.grab(region)
                 mss.tools.to_png(shot.rgb, shot.size, output=f"debug_{casts:03d}.png")
             if pos is None:
-                print(f"[{casts}] Schwimmer nicht gefunden - neuer Wurf")
+                activity.log("missing", "Schwimmer nicht gefunden - neuer Wurf")
                 time.sleep(1.0)
                 continue
 
             bx, by = region["left"] + pos[0], region["top"] + pos[1]
             half = args.box // 2
             box = {"left": bx - half, "top": by - half, "width": args.box, "height": args.box}
-            print(f"[{casts}] Schwimmer bei ({bx}, {by})")
+            activity.log("found", f"Schwimmer bei ({bx}, {by})", status="Wartet auf Biss")
+            watch_start = time.time()
 
             detector = BiteDetector(args.factor, args.min_motion)
             prev = grab(box)
             deadline = time.time() + args.timeout
             bite = False
-            while time.time() < deadline and not stop["flag"]:
+            while time.time() < deadline and not activity.stop_requested:
                 time.sleep(1.0 / args.fps)
                 cur = grab(box)
                 value = motion(prev, cur)
                 prev = cur
                 bite = detector.update(value)
+                activity.motion(value, detector.last_limit)
                 if args.debug:
                     print(f"    Bewegung {value:6.2f}  Schwelle {detector.last_limit:6.2f}")
                 if bite:
                     break
 
-            if stop["flag"]:
+            if activity.stop_requested:
                 break
             if bite:
                 pyautogui.moveTo(bx, by)
                 time.sleep(0.1)
                 pyautogui.click(button="right")
-                catches += 1
-                print(f"[{casts}] Biss! Eingeholt ({catches}/{casts})")
+                wait = time.time() - watch_start
+                activity.log("catch", f"Biss nach {wait:.1f}s - eingeholt",
+                             status="Holt ein", wait=wait)
                 time.sleep(args.loot_wait)
             else:
-                print(f"[{casts}] Kein Biss erkannt - neuer Wurf")
+                activity.log("timeout", "Kein Biss erkannt - neuer Wurf")
 
-    print(f"Beendet. {catches} Faenge bei {casts} Wuerfen.")
+    done = activity.snapshot()
+    activity.log("stop", f"Beendet. {done['catches']} Faenge bei {done['casts']} Wuerfen.",
+                 status="Gestoppt")
 
 
 if __name__ == "__main__":

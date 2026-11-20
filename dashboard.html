@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Angelbot</title>
+<style>
+:root {
+  --bg: #f3f5f7; --card: #ffffff; --text: #17212b; --muted: #64727f; --line: #dde3e9;
+  --accent: #0b7285; --good: #2b8a3e; --warn: #b3541e; --bad: #c92a2a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10161c; --card: #19222b; --text: #e4eaf0; --muted: #8b99a6; --line: #2a3642;
+    --accent: #3bc9db; --good: #69db7c; --warn: #ffa94d; --bad: #ff8787;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; flex: 1; }
+h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; }
+#status { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--card); font-weight: 600; }
+#status.offline { color: var(--bad); }
+button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--bad);
+  background: transparent; color: var(--bad); cursor: pointer; }
+button:hover { background: var(--bad); color: var(--card); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.tile .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tile .l { color: var(--muted); font-size: 13px; }
+section { margin-top: 14px; }
+canvas { width: 100%; height: 140px; display: block; }
+.legend { color: var(--muted); font-size: 13px; margin-top: 6px; }
+.logwrap { max-height: 420px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line); vertical-align: top; }
+td.t { width: 1%; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+td.k { width: 1%; padding-right: 18px; white-space: nowrap; font-weight: 600; }
+.catch { color: var(--good); } .timeout, .missing { color: var(--warn); }
+.stop { color: var(--bad); } .cast, .found, .start, .info { color: var(--accent); }
+.empty { color: var(--muted); padding: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Angelbot</h1>
+    <span id="status">Verbinde…</span>
+    <button id="stop">Bot stoppen</button>
+  </header>
+
+  <div class="tiles">
+    <div class="card tile"><div class="v" id="catches">–</div><div class="l">Fänge</div></div>
+    <div class="card tile"><div class="v" id="casts">–</div><div class="l">Würfe</div></div>
+    <div class="card tile"><div class="v" id="success">–</div><div class="l">Erfolgsquote</div></div>
+    <div class="card tile"><div class="v" id="per_hour">–</div><div class="l">Fänge pro Stunde</div></div>
+    <div class="card tile"><div class="v" id="avg_wait">–</div><div class="l">Ø Zeit bis Biss</div></div>
+    <div class="card tile"><div class="v" id="fails">–</div><div class="l">Kein Biss / kein Schwimmer</div></div>
+    <div class="card tile"><div class="v" id="runtime">–</div><div class="l">Laufzeit</div></div>
+  </div>
+
+  <section class="card">
+    <h2>Bewegung am Schwimmer (aktueller Wurf)</h2>
+    <canvas id="chart"></canvas>
+    <div class="legend">Linie: gemessene Bewegung · gestrichelt: Biss-Schwelle <span id="limit"></span></div>
+  </section>
+
+  <section class="card">
+    <h2>Aktivitätslog</h2>
+    <div class="logwrap"><table id="log"></table><div class="empty" id="empty">Noch keine Einträge.</div></div>
+  </section>
+</main>
+<script>
+const LABELS = { start: "Start", cast: "Wurf", found: "Schwimmer", missing: "Nicht gefunden",
+  catch: "Fang", timeout: "Kein Biss", stop: "Stopp", info: "Info" };
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function duration(s) {
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const pad = n => String(n).padStart(2, "0");
+  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+function draw(values, limit) {
+  const c = $("chart"), r = devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = w * r; c.height = h * r;
+  const g = c.getContext("2d");
+  g.scale(r, r);
+  const max = Math.max(limit * 1.5, ...values, 1);
+  const y = v => h - 4 - (v / max) * (h - 8);
+  g.strokeStyle = css("--warn"); g.setLineDash([5, 4]); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, y(limit)); g.lineTo(w, y(limit)); g.stroke();
+  if (values.length < 2) return;
+  g.setLineDash([]); g.strokeStyle = css("--accent"); g.lineWidth = 1.5;
+  g.beginPath();
+  values.forEach((v, i) => {
+    const x = i / 239 * w;
+    i ? g.lineTo(x, y(v)) : g.moveTo(x, y(v));
+  });
+  g.stroke();
+}
+
+function render(s) {
+  $("status").textContent = s.status;
+  $("status").className = "";
+  $("catches").textContent = s.catches;
+  $("casts").textContent = s.casts;
+  $("success").textContent = s.casts ? s.success + " %" : "–";
+  $("per_hour").textContent = s.per_hour ?? "–";
+  $("avg_wait").textContent = s.avg_wait != null ? s.avg_wait + " s" : "–";
+  $("fails").textContent = `${s.timeouts} / ${s.missing}`;
+  $("runtime").textContent = duration(s.runtime);
+  $("limit").textContent = s.limit ? `(${s.limit})` : "";
+  draw(s.motion, s.limit);
+  const table = $("log");
+  table.replaceChildren(...s.events.map(e => {
+    const tr = document.createElement("tr");
+    [["t", e.time.slice(11)], ["k " + e.kind, LABELS[e.kind] || e.kind], ["", e.message]]
+      .forEach(([cls, text]) => {
+        const td = document.createElement("td");
+        td.className = cls; td.textContent = text; tr.append(td);
+      });
+    return tr;
+  }));
+  $("empty").hidden = s.events.length > 0;
+}
+
+async function tick() {
+  try {
+    render(await (await fetch("/api/state")).json());
+  } catch {
+    $("status").textContent = "Bot nicht erreichbar";
+    $("status").className = "offline";
+  }
+}
+$("stop").onclick = () => fetch("/api/stop", { method: "POST" });
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
